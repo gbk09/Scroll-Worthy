@@ -40,6 +40,12 @@ python github_content_generator.py owner/repo --token YOUR_GITHUB_TOKEN
 (60 requests/hour) — recommended for repeated use.
 
 ## Output
-
+instagram_reel.md
+instagram_carousel.md
+instagram_post.md
+linkedin_post.md
+youtube_script.md
+x_thread.md
+repo_meta.json
 Running the script creates a folder (default: `generated_content/<repo-name>/`)
 containing:
