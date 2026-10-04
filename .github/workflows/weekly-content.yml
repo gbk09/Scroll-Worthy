@@ -26,11 +26,15 @@ jobs:
       - name: Generate content for target repos
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Private repos need a token that can read them. Create a fine-grained personal access
+          # token (Contents: read-only on the target repo) and save it as SOURCE_REPO_TOKEN.
+          # Public repos work without it.
+          SOURCE_TOKEN: ${{ secrets.SOURCE_REPO_TOKEN || secrets.GITHUB_TOKEN }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # optional fallback
           # Comma-separated owner/repo list. Works whether TARGET_REPOS was saved as a
-          # repository Variable or a Secret; falls back to GK_AI_Traders if neither is set.
-          TARGET_REPOS: ${{ vars.TARGET_REPOS || secrets.TARGET_REPOS || 'gbk09/GK_AI_Traders' }}
+          # repository Variable or a Secret; falls back to GK_AI_Trader if neither is set.
+          TARGET_REPOS: ${{ vars.TARGET_REPOS || secrets.TARGET_REPOS || 'gbk09/GK_AI_Trader' }}
         run: |
           mkdir -p generated_content
           count=0
@@ -39,7 +43,7 @@ jobs:
             repo="$(echo "$repo" | xargs)"   # trim whitespace
             [ -z "$repo" ] && continue
             echo "Generating content for: $repo"
-            python github_content_generator.py "$repo" --ai --token "$GITHUB_TOKEN" \
+            python github_content_generator.py "$repo" --ai --token "$SOURCE_TOKEN" \
               --out "generated_content/$(basename "$repo")"
             count=$((count+1))
           done
