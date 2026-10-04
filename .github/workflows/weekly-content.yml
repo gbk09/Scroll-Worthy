@@ -28,14 +28,25 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # optional fallback
-          TARGET_REPOS: ${{ vars.TARGET_REPOS }}
+          # Comma-separated owner/repo list. Works whether TARGET_REPOS was saved as a
+          # repository Variable or a Secret; falls back to GK_AI_Traders if neither is set.
+          TARGET_REPOS: ${{ vars.TARGET_REPOS || secrets.TARGET_REPOS || 'gbk09/GK_AI_Traders' }}
         run: |
+          mkdir -p generated_content
+          count=0
           IFS=',' read -ra REPOS <<< "$TARGET_REPOS"
           for repo in "${REPOS[@]}"; do
+            repo="$(echo "$repo" | xargs)"   # trim whitespace
+            [ -z "$repo" ] && continue
             echo "Generating content for: $repo"
             python github_content_generator.py "$repo" --ai --token "$GITHUB_TOKEN" \
-              --out "generated_content/$(basename $repo)"
+              --out "generated_content/$(basename "$repo")"
+            count=$((count+1))
           done
+          if [ "$count" -eq 0 ]; then
+            echo "::error::No repos to process. Set TARGET_REPOS (owner/repo, comma-separated)."
+            exit 1
+          fi
 
       - name: Commit generated content
         run: |
