@@ -10,14 +10,21 @@ USAGE
     python github_content_generator.py owner/repo [--out ./content] [--ai]
 
     --out   Output folder (default: ./generated_content/<repo>)
-    --ai    Use Anthropic API (Claude) to rewrite/upgrade the template copy.
-            Requires ANTHROPIC_API_KEY in the environment. Without --ai, the
-            script runs fully offline using deterministic templates.
+    --ai    Use an LLM to rewrite/upgrade the template copy. Uses OpenRouter when
+            OPENROUTER_API_KEY is set (falls back to ANTHROPIC_API_KEY if not).
+            If no key is available the plain template copy is written instead.
+            Without --ai, the script runs fully offline using templates.
+
+            Optional env vars:
+              OPENROUTER_MODEL       model for long-form copy (Reel, carousel,
+                                     LinkedIn, YouTube). Default anthropic/claude-sonnet-4.5
+              OPENROUTER_MODEL_FAST  cheaper model for short copy (IG post, X thread).
+                                     Default google/gemini-2.5-flash
 
 REQUIREMENTS
 ------------
     pip install requests --break-system-packages
-    pip install anthropic --break-system-packages   # only needed for --ai
+    pip install anthropic --break-system-packages   # optional, Anthropic fallback only
 
 OUTPUT
 ------
@@ -108,29 +115,80 @@ def extract_features(readme: str, limit: int = 6) -> List[str]:
 
 
 # --------------------------------------------------------------------------- #
-# 2. Optional AI rewrite layer (Claude via Anthropic API)
+# 2. Optional AI rewrite layer (OpenRouter, with Anthropic API as fallback)
 # --------------------------------------------------------------------------- #
 
-def ai_rewrite(prompt: str, system: str = "") -> str:
-    """Send a prompt to Claude for a sharper rewrite. Falls back to the
-    original prompt text if no API key / package is available."""
-    api_key = os.environ.get("ANTHROPIC_API_KEY")
-    if not api_key:
-        return prompt
-    try:
-        import anthropic
-    except ImportError:
-        return prompt
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+DEFAULT_MODEL = os.environ.get("OPENROUTER_MODEL", "anthropic/claude-sonnet-4.5")
+FAST_MODEL = os.environ.get("OPENROUTER_MODEL_FAST", "google/gemini-2.5-flash")
 
-    client = anthropic.Anthropic(api_key=api_key)
-    msg = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=1200,
-        system=system or "You are a sharp, concise social media copywriter.",
-        messages=[{"role": "user", "content": prompt}],
-    )
-    parts = [b.text for b in msg.content if getattr(b, "type", "") == "text"]
-    return "\n".join(parts).strip() or prompt
+SYSTEM_PROMPT = (
+    "You are a sharp, concise social media copywriter for Scroll-Worthy. "
+    "You rewrite the draft you are given. Keep every factual detail (names, numbers, links) "
+    "exactly as in the draft and never invent features, stats or claims. "
+    "Return only the rewritten copy, with no preamble or commentary."
+)
+
+
+def ai_rewrite(instruction: str, draft: str, system: str = "", fast: bool = False) -> str:
+    """Rewrite `draft` following `instruction` using an LLM.
+
+    Tries OpenRouter first (OPENROUTER_API_KEY), then the Anthropic API
+    (ANTHROPIC_API_KEY). If neither is configured, or every call fails, the
+    original `draft` is returned unchanged so the pipeline never writes
+    prompt text or empty files.
+
+    fast=True routes to the cheaper OPENROUTER_MODEL_FAST (for short copy).
+    """
+    system = system or SYSTEM_PROMPT
+    user_msg = f"{instruction}\n\n{draft}"
+
+    # --- 1. OpenRouter ------------------------------------------------------
+    or_key = os.environ.get("OPENROUTER_API_KEY")
+    if or_key:
+        try:
+            resp = requests.post(
+                OPENROUTER_URL,
+                headers={
+                    "Authorization": f"Bearer {or_key}",
+                    "Content-Type": "application/json",
+                    "X-Title": "Scroll-Worthy",
+                },
+                json={
+                    "model": FAST_MODEL if fast else DEFAULT_MODEL,
+                    "max_tokens": 1200,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user_msg},
+                    ],
+                },
+                timeout=90,
+            )
+            resp.raise_for_status()
+            text = resp.json()["choices"][0]["message"]["content"]
+            return (text or "").strip() or draft
+        except Exception as exc:  # network, HTTP error, unexpected response shape
+            print(f"[warn] OpenRouter call failed ({exc}); trying fallback", file=sys.stderr)
+
+    # --- 2. Anthropic API fallback -----------------------------------------
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if api_key:
+        try:
+            import anthropic
+
+            client = anthropic.Anthropic(api_key=api_key)
+            msg = client.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=1200,
+                system=system,
+                messages=[{"role": "user", "content": user_msg}],
+            )
+            parts = [b.text for b in msg.content if getattr(b, "type", "") == "text"]
+            return "\n".join(parts).strip() or draft
+        except Exception as exc:
+            print(f"[warn] Anthropic call failed ({exc}); using template copy", file=sys.stderr)
+
+    return draft
 
 
 # --------------------------------------------------------------------------- #
@@ -181,8 +239,9 @@ def gen_instagram_reel(repo: RepoInfo, features: List[str], use_ai: bool) -> str
 
     if use_ai:
         script = ai_rewrite(
-            f"Rewrite this Instagram Reel script to be punchier and more scroll-stopping, "
-            f"keep the same beat structure and timing labels, keep it under 30 seconds of spoken content:\n\n{script}"
+            "Rewrite this Instagram Reel script to be punchier and more scroll-stopping, "
+            "keep the same beat structure and timing labels, keep it under 30 seconds of spoken content:",
+            script,
         )
     return script
 
@@ -204,8 +263,9 @@ def gen_instagram_carousel(repo: RepoInfo, features: List[str], use_ai: bool) ->
     out = body + "\n\n---\nCAPTION:\n" + caption
     if use_ai:
         out = ai_rewrite(
-            f"Rewrite this Instagram carousel (one line per slide, keep slide numbering) "
-            f"to be tighter and more visually descriptive for a designer to build from:\n\n{out}"
+            "Rewrite this Instagram carousel (one line per slide, keep slide numbering) "
+            "to be tighter and more visually descriptive for a designer to build from:",
+            out,
         )
     return out
 
@@ -218,7 +278,11 @@ def gen_instagram_post(repo: RepoInfo, features: List[str], use_ai: bool) -> str
         + _hashtags(repo, ["#SoftwareEngineering"])
     )
     if use_ai:
-        body = ai_rewrite(f"Rewrite this single Instagram post caption to be more engaging, keep it under 150 words:\n\n{body}")
+        body = ai_rewrite(
+            "Rewrite this single Instagram post caption to be more engaging, keep it under 150 words:",
+            body,
+            fast=True,
+        )
     return body
 
 
@@ -246,8 +310,9 @@ def gen_linkedin_post(repo: RepoInfo, features: List[str], use_ai: bool) -> str:
     """).strip()
     if use_ai:
         post = ai_rewrite(
-            f"Rewrite this LinkedIn post to sound like a credible practitioner sharing real work "
-            f"(no hype, no emojis in the body, professional but personal tone):\n\n{post}"
+            "Rewrite this LinkedIn post to sound like a credible practitioner sharing real work "
+            "(no hype, no emojis in the body, professional but personal tone):",
+            post,
         )
     return post
 
@@ -291,8 +356,9 @@ def gen_youtube_script(repo: RepoInfo, features: List[str], use_ai: bool) -> str
     """).strip()
     if use_ai:
         script = ai_rewrite(
-            f"Rewrite this YouTube script to be tighter with stronger retention hooks between sections, "
-            f"keep the timestamp structure:\n\n{script}"
+            "Rewrite this YouTube script to be tighter with stronger retention hooks between sections, "
+            "keep the timestamp structure:",
+            script,
         )
     return script
 
@@ -306,7 +372,9 @@ def gen_x_thread(repo: RepoInfo, features: List[str], use_ai: bool) -> str:
     thread = "\n\n".join(tweets)
     if use_ai:
         thread = ai_rewrite(
-            f"Rewrite this X (Twitter) thread to be punchier, one idea per tweet, keep the numbering (1/, 2/, ...):\n\n{thread}"
+            "Rewrite this X (Twitter) thread to be punchier, one idea per tweet, keep the numbering (1/, 2/, ...):",
+            thread,
+            fast=True,
         )
     return thread
 
@@ -358,7 +426,7 @@ def main():
     parser = argparse.ArgumentParser(description="Generate multi-platform social content from a GitHub repo.")
     parser.add_argument("repo", help="GitHub repo as owner/name, e.g. ganesh/GK_AI_Traders")
     parser.add_argument("--out", default=None, help="Output directory (default: ./generated_content/<repo-name>)")
-    parser.add_argument("--ai", action="store_true", help="Use Claude (ANTHROPIC_API_KEY) to sharpen the copy")
+    parser.add_argument("--ai", action="store_true", help="Use an LLM (OPENROUTER_API_KEY, or ANTHROPIC_API_KEY as fallback) to sharpen the copy")
     parser.add_argument("--token", default=os.environ.get("GITHUB_TOKEN"), help="GitHub token (optional, raises rate limit)")
     args = parser.parse_args()
 

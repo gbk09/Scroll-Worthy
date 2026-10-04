@@ -26,7 +26,8 @@ jobs:
       - name: Generate content for target repos
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}   # optional fallback
           TARGET_REPOS: ${{ vars.TARGET_REPOS }}
         run: |
           IFS=',' read -ra REPOS <<< "$TARGET_REPOS"

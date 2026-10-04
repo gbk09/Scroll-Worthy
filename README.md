@@ -23,7 +23,7 @@ Given a GitHub repo (`owner/repo`), the script:
 
 ```bash
 pip install requests --break-system-packages
-pip install anthropic --break-system-packages   # optional, for --ai mode
+pip install anthropic --break-system-packages   # optional, Anthropic fallback only
 ```
 
 ## Usage
@@ -31,11 +31,19 @@ pip install anthropic --break-system-packages   # optional, for --ai mode
 ```bash
 python github_content_generator.py owner/repo
 python github_content_generator.py owner/repo --out ./content
-python github_content_generator.py owner/repo --ai        # sharpens copy via Claude
+python github_content_generator.py owner/repo --ai        # sharpens copy via OpenRouter
 python github_content_generator.py owner/repo --token YOUR_GITHUB_TOKEN
 ```
 
-`--ai` requires an `ANTHROPIC_API_KEY` environment variable.
+`--ai` uses OpenRouter and requires an `OPENROUTER_API_KEY` environment variable
+(in GitHub Actions: repo Settings → Secrets and variables → Actions → `OPENROUTER_API_KEY`).
+If it is missing, `ANTHROPIC_API_KEY` is used as a fallback; if neither is set,
+the plain template copy is written.
+
+Optional model overrides (environment variables):
+- `OPENROUTER_MODEL` — long-form copy (Reel, carousel, LinkedIn, YouTube). Default `anthropic/claude-sonnet-4.5`
+- `OPENROUTER_MODEL_FAST` — short copy (Instagram post, X thread). Default `google/gemini-2.5-flash`
+
 `--token` (or the `GITHUB_TOKEN` env var) raises GitHub's anonymous rate limit
 (60 requests/hour) — recommended for repeated use.
 
