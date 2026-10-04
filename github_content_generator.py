@@ -76,6 +76,12 @@ def fetch_repo_info(owner_repo: str, token: Optional[str] = None) -> RepoInfo:
         headers["Authorization"] = f"Bearer {token}"
 
     repo_resp = requests.get(f"{GITHUB_API}/repos/{owner_repo}", headers=headers, timeout=20)
+    if repo_resp.status_code == 404:
+        sys.exit(
+            f"[error] {owner_repo} not found (404). Check the owner/repo spelling. "
+            f"If the repo is private, pass a token that can read it (--token, or the "
+            f"SOURCE_REPO_TOKEN secret in GitHub Actions)."
+        )
     repo_resp.raise_for_status()
     repo = repo_resp.json()
 
